@@ -1,0 +1,16 @@
+import { readFileSync } from 'node:fs';
+import postgres from 'postgres';
+
+const url = process.env.DATABASE_URL;
+if (!url) {
+  console.error('Set DATABASE_URL first (e.g. `export $(cat .env.local | xargs)` or use dotenv).');
+  process.exit(1);
+}
+const needsSsl = process.env.DATABASE_SSL === 'require' ||
+  (process.env.DATABASE_SSL !== 'disable' && !/@(localhost|127\.0\.0\.1|[^/:@]+\.railway\.internal)[:/]/.test(url));
+const sql = postgres(url, { ssl: needsSsl ? 'require' : false, prepare: false, onnotice: () => {} });
+for (const file of ['db/schema.sql', 'db/seed.sql']) {
+  await sql.unsafe(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
+  console.log(`ran ${file}`);
+}
+await sql.end();
