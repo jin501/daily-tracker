@@ -39,11 +39,12 @@ npm run dev                        # http://localhost:3000
 
 The start command runs `scripts/db-setup.mjs` first, so tables are created (or left alone) on every boot. Point the service at this repo, set `DATABASE_URL=${{Postgres.DATABASE_URL}}` plus the keys above, and it's live.
 
-### Deploy to Vercel
+### Deploy to Vercel (free)
 
 1. Push to GitHub and import the repo in Vercel.
-2. Add the env vars above.
-3. Run `npm run db:setup` once from your machine against the production `DATABASE_URL`.
+2. In the Vercel project, open Storage and add a Neon Postgres database. It sets `DATABASE_URL` for you.
+3. Add `ANTHROPIC_API_KEY`, `USDA_API_KEY`, `APP_PASSWORD`, `SESSION_SECRET`, `APP_TIMEZONE` in Settings, Environment Variables, then redeploy.
+   Tables are created automatically during the build.
 4. On your phone, open the site and use "Add to Home Screen". It runs full-screen like an app.
 
 ## Changing things later

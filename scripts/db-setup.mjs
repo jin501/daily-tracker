@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import postgres from 'postgres';
 
 const url = process.env.DATABASE_URL;
+if (!url && process.argv.includes('--if-configured')) {
+  console.log('DATABASE_URL not set, skipping table setup');
+  process.exit(0);
+}
 if (!url) {
   console.error('Set DATABASE_URL first (e.g. `export $(cat .env.local | xargs)` or use dotenv).');
   process.exit(1);

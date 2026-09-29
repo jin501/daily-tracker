@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/db-setup.mjs --if-configured && next build",
     "start": "node scripts/db-setup.mjs && next start",
     "typecheck": "tsc --noEmit",
     "db:setup": "node scripts/db-setup.mjs"
