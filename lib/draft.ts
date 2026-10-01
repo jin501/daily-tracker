@@ -34,13 +34,17 @@ export const MealDraft = z.object({
 
 export const SetDraft = z.object({
   weight_kg: nnum,
+  weight_input: nnum.default(null), // what you typed, in weight_unit
+  weight_unit: z.enum(['lb', 'kg']).nullable().default(null),
   reps: z.number().int().nullable(),
   duration_s: z.number().int().nullable(),
   distance_m: nnum,
 });
 
 export const ExerciseDraft = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1), // the variation, e.g. "Cable Row"
+  movement: z.string().min(1), // the core movement, e.g. "Row"
+  category: z.enum(['upper', 'lower', 'abs', 'cardio', 'full_body']),
   as_written: z.string().nullable(),
   tags: z.array(z.string()),
   superset: z.string().nullable(),

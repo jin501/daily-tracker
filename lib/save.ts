@@ -1,17 +1,24 @@
 import type postgres from 'postgres';
 import { db } from './db';
 import type { Draft } from './draft';
+import { findOrCreateMovement, type Category } from './movements';
 
-const titleCase = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+type Ex = { name: string; as_written: string | null; tags: string[]; movement: string; category: Category };
 
-async function upsertExercise(tx: postgres.TransactionSql, name: string, asWritten: string | null, tags: string[]) {
-  const [found] = await tx<{ id: number; aliases: string[] }[]>`
-    select id, aliases from exercises
+/** Finds the variation by name or alias (adding typos as aliases), and makes sure it has a core movement. */
+async function upsertExercise(tx: postgres.TransactionSql, ex: Ex) {
+  const { name, as_written: asWritten, tags } = ex;
+  const [found] = await tx<{ id: number; aliases: string[]; movement_id: number | null }[]>`
+    select id, aliases, movement_id from exercises
     where lower(name) = lower(${name})
        or exists (select 1 from unnest(aliases) a where lower(a) = lower(${name}))
     limit 1`;
   const alias = asWritten && asWritten.toLowerCase() !== name.toLowerCase() ? asWritten : null;
   if (found) {
+    if (found.movement_id == null) {
+      const mid = await findOrCreateMovement(tx, ex.movement, ex.category);
+      await tx`update exercises set movement_id = ${mid} where id = ${found.id}`;
+    }
     await tx`
       update exercises set
         tags = (select array(select distinct unnest(tags || ${tags}::text[]))),
@@ -19,8 +26,9 @@ async function upsertExercise(tx: postgres.TransactionSql, name: string, asWritt
       where id = ${found.id}`;
     return found.id;
   }
+  const mid = await findOrCreateMovement(tx, ex.movement, ex.category);
   const [row] = await tx<{ id: number }[]>`
-    insert into exercises (name, aliases, tags) values (${name}, ${alias ? [alias] : []}::text[], ${tags}::text[])
+    insert into exercises (name, aliases, tags, movement_id) values (${name}, ${alias ? [alias] : []}::text[], ${tags}::text[], ${mid})
     returning id`;
   return row.id;
 }
@@ -44,11 +52,11 @@ export async function saveDrafts(text: string, items: Draft[]) {
         const [w] = await tx<{ id: number }[]>`
           insert into workouts (entry_id, local_date, title, notes) values (${entry.id}, ${item.date}, ${item.title}, ${item.notes}) returning id`;
         for (const [pos, ex] of item.exercises.entries()) {
-          const exId = await upsertExercise(tx, ex.name, ex.as_written, ex.tags);
+          const exId = await upsertExercise(tx, ex);
           for (const [idx, s] of ex.sets.entries()) {
             await tx`
-              insert into workout_sets (workout_id, exercise_id, position, set_index, weight_kg, reps, duration_s, distance_m, superset)
-              values (${w.id}, ${exId}, ${pos}, ${idx + 1}, ${s.weight_kg}, ${s.reps}, ${s.duration_s}, ${s.distance_m}, ${ex.superset})`;
+              insert into workout_sets (workout_id, exercise_id, position, set_index, weight_kg, weight_input, weight_unit, reps, duration_s, distance_m, superset)
+              values (${w.id}, ${exId}, ${pos}, ${idx + 1}, ${s.weight_kg}, ${s.weight_input}, ${s.weight_unit}, ${s.reps}, ${s.duration_s}, ${s.distance_m}, ${ex.superset})`;
           }
         }
       } else if (item.type === 'activity') {
@@ -63,13 +71,12 @@ export async function saveDrafts(text: string, items: Draft[]) {
   });
 }
 
-/** Unknown habit keys get created on the fly, so "took creatine" just works. */
+/** Checks off a habit you track. Habits are added and removed in Settings, never from the log box. */
 export async function setHabit(sql: postgres.Sql | postgres.TransactionSql, key: string, date: string, done: boolean, entryId: number | null = null) {
-  const [h] = await sql<{ id: number }[]>`
-    insert into habits (key, name, sort) values (${key}, ${titleCase(key)}, 100)
-    on conflict (key) do update set active = true
-    returning id`;
+  const [h] = await sql<{ id: number }[]>`select id from habits where key = ${key} and active`;
+  if (!h) return false;
   await sql`
     insert into habit_logs (habit_id, local_date, done, entry_id) values (${h.id}, ${date}, ${done}, ${entryId})
     on conflict (habit_id, local_date) do update set done = excluded.done, entry_id = coalesce(excluded.entry_id, habit_logs.entry_id)`;
+  return true;
 }

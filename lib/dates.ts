@@ -55,3 +55,34 @@ export function fmt(d: string, opts: Intl.DateTimeFormatOptions): string {
 }
 
 export const dayNum = (d: string) => Number(d.slice(8, 10));
+
+// ---------- clock times (gym sessions) ----------
+
+const partsIn = (at: Date) => {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(at).map((x) => [x.type, x.value]),
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+};
+
+/** "HH:MM" on a log date, in the app timezone -> real instant. Times before the day rollover belong to the next calendar day. */
+export function localTimeToDate(logDate: string, hhmm: string): Date {
+  const [h, m] = hhmm.split(':').map(Number);
+  const day = h < DAY_START ? addDays(logDate, 1) : logDate;
+  const [y, mo, d] = day.split('-').map(Number);
+  const wall = Date.UTC(y, mo - 1, d, h, m);
+  let guess = wall;
+  for (let i = 0; i < 2; i++) guess = wall - (partsIn(new Date(guess)) - guess);
+  return new Date(guess);
+}
+
+/** Real instant -> "HH:MM" in the app timezone (for time inputs). */
+export function toLocalHHMM(at: Date | string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+}
+
+/** Real instant -> "5:42 PM". */
+export function clock(at: Date | string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(new Date(at));
+}

@@ -3,7 +3,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check } from './icons';
 
-export default function HabitButton({ habitKey, name, date, done }: { habitKey: string; name: string; date: string; done: boolean }) {
+export default function HabitButton({ habitKey, name, emoji, date, done }: { habitKey: string; name: string; emoji?: string | null; date: string; done: boolean }) {
   const router = useRouter();
   const [on, setOn] = useState(done);
   const [, start] = useTransition();
@@ -23,15 +23,17 @@ export default function HabitButton({ habitKey, name, date, done }: { habitKey: 
   return (
     <button type="button" className="habit" onClick={toggle} aria-pressed={on}>
       <span className={`check ${on ? 'check-on' : 'check-off'}`}>{on && <Check />}</span>
+      {emoji && <span className="emoji" aria-hidden>{emoji}</span>}
       {name}
     </button>
   );
 }
 
-export function DerivedHabit({ name, done }: { name: string; done: boolean }) {
+export function DerivedHabit({ name, emoji, done }: { name: string; emoji?: string; done: boolean }) {
   return (
     <button type="button" className="habit" disabled aria-pressed={done} title="Tracked automatically">
       <span className={`check ${done ? 'check-on' : 'check-off'}`}>{done && <Check />}</span>
+      {emoji && <span className="emoji" aria-hidden>{emoji}</span>}
       {name}
     </button>
   );

@@ -41,7 +41,7 @@ const registry: Record<string, MetricDef> = {
       from meals m join food_items fi on fi.meal_id = m.id
       where m.local_date between ${f} and ${t} group by 1`),
   },
-  /** Any workout or activity (tennis, runs...) that day. Counts toward the weekly goal. */
+  /** Any workout, activity (tennis, runs...) or gym check-in that day. Counts toward the weekly goal. */
   training_days: {
     label: 'Workout days',
     unit: 'days',
@@ -49,18 +49,20 @@ const registry: Record<string, MetricDef> = {
       select d, 1::float8 as v from (
         select local_date as d from workouts where local_date between ${f} and ${t}
         union select local_date from activities where local_date between ${f} and ${t}
+        union select local_date from gym_sessions where local_date between ${f} and ${t}
       ) x group by d`),
   },
-  /** Days with non-ab lifting or an activity. Used for calendar colors. */
+  /** Days with non-ab lifting, an activity or a gym check-in. Used for calendar colors. */
   regular_days: {
     label: 'Regular workout days',
     unit: 'days',
     daily: (f, t) => toMap(db()`
       select d, 1::float8 as v from (
         select w.local_date as d
-        from workouts w join workout_sets s on s.workout_id = w.id join exercises e on e.id = s.exercise_id
-        where w.local_date between ${f} and ${t} and not ('abs' = any(e.tags))
+        from workouts w join workout_sets s on s.workout_id = w.id join exercise_info ei on ei.exercise_id = s.exercise_id
+        where w.local_date between ${f} and ${t} and ei.category <> 'abs'
         union select local_date from activities where local_date between ${f} and ${t}
+        union select local_date from gym_sessions where local_date between ${f} and ${t}
       ) x group by d`),
   },
   ab_sets: {
@@ -68,8 +70,15 @@ const registry: Record<string, MetricDef> = {
     unit: 'sets',
     daily: (f, t) => toMap(db()`
       select w.local_date as d, count(*)::float8 as v
-      from workouts w join workout_sets s on s.workout_id = w.id join exercises e on e.id = s.exercise_id
-      where w.local_date between ${f} and ${t} and 'abs' = any(e.tags) group by 1`),
+      from workouts w join workout_sets s on s.workout_id = w.id join exercise_info ei on ei.exercise_id = s.exercise_id
+      where w.local_date between ${f} and ${t} and ei.category = 'abs' group by 1`),
+  },
+  gym_hours: {
+    label: 'Gym time',
+    unit: 'h',
+    daily: (f, t) => toMap(db()`
+      select local_date as d, sum(extract(epoch from (coalesce(ended_at, now()) - started_at)) / 3600)::float8 as v
+      from gym_sessions where local_date between ${f} and ${t} group by 1`),
   },
   ab_days: {
     label: 'Ab days',
@@ -130,6 +139,7 @@ export async function getGoals(): Promise<Record<string, Goal>> {
   // sensible fallbacks if the seed wasn't run
   out.protein_daily ??= { key: 'protein_daily', label: 'Protein', target: 130, success_min: 110, period: 'day' };
   out.workouts_weekly ??= { key: 'workouts_weekly', label: 'Workouts per week', target: 4, success_min: null, period: 'week' };
+  out.calories_daily ??= { key: 'calories_daily', label: 'Calories', target: 2200, success_min: 2000, period: 'day' };
   out.abs_sets_weekly ??= { key: 'abs_sets_weekly', label: 'Ab sets per week', target: 12, success_min: null, period: 'week' };
   return out;
 }

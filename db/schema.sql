@@ -83,7 +83,7 @@ create table if not exists habits (
   id      serial primary key,
   key     text not null unique,
   name    text not null,
-  color   text not null default '#5E9A5A',
+  color   text not null default '#9C83E0',
   sort    integer not null default 0,
   active  boolean not null default true
 );
@@ -113,3 +113,70 @@ create table if not exists food_cache (
   per100       jsonb,                -- { protein, calories, carbs, fat } per 100 g
   fetched_at   timestamptz not null default now()
 );
+
+-- ---------- v2: core movements, units, gym sessions, sandbox ----------
+
+-- A movement is the core exercise ("Row"); exercises are its variations ("Cable Row", "DB Row").
+create table if not exists movements (
+  id        serial primary key,
+  name      text not null unique,
+  category  text not null default 'upper'   -- upper | lower | abs | cardio | full_body
+);
+create unique index if not exists movements_name_ci on movements (lower(name));
+alter table exercises add column if not exists movement_id integer references movements(id) on delete set null;
+
+-- What you actually typed, so "25 lb" shows as 25 lb (not 24.9) in either unit.
+alter table workout_sets add column if not exists weight_input numeric;
+alter table workout_sets add column if not exists weight_unit text;
+
+alter table habits add column if not exists emoji text;
+
+-- Gym check-ins. Assigned to the log date you signed in on.
+create table if not exists gym_sessions (
+  id          bigserial primary key,
+  local_date  date not null,
+  started_at  timestamptz not null default now(),
+  ended_at    timestamptz,
+  auto_ended  boolean not null default false
+);
+create index if not exists gym_sessions_date_idx on gym_sessions(local_date);
+
+-- Manual "this was a leg day" overrides. Without a row, the day type is worked out from the sets.
+create table if not exists day_types (
+  local_date  date primary key,
+  day_type    text not null
+);
+
+create table if not exists app_settings (
+  key    text primary key,
+  value  jsonb not null
+);
+
+-- USDA candidates per search phrase (replaces food_cache, which kept only the first hit).
+create table if not exists food_lookup (
+  query       text primary key,
+  candidates  jsonb not null,
+  fetched_at  timestamptz not null default now()
+);
+
+-- One-time data changes live in db/migrations and are recorded here.
+create table if not exists schema_migrations (
+  name    text primary key,
+  ran_at  timestamptz not null default now()
+);
+
+-- Every set query goes through this, so a variation always knows its core movement and category.
+create or replace view exercise_info as
+select
+  e.id as exercise_id,
+  e.name as variation,
+  e.movement_id,
+  coalesce(m.name, e.name) as movement,
+  coalesce(m.category,
+    case when 'abs' = any(e.tags) then 'abs'
+         when 'cardio' = any(e.tags) then 'cardio'
+         when 'full_body' = any(e.tags) then 'full_body'
+         when e.tags && array['legs', 'glutes'] then 'lower'
+         else 'upper' end) as category,
+  e.tags
+from exercises e left join movements m on m.id = e.movement_id;

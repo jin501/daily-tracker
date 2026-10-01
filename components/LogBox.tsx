@@ -1,11 +1,17 @@
 'use client';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { Draft, FoodItem } from '@/lib/draft';
+import type { Draft, FoodItem, MealDraft } from '@/lib/draft';
+import type { WorkoutPlan } from '@/lib/coach';
+import type { WUnit } from '@/lib/units';
+import { CATEGORY_LABEL } from '@/lib/categories';
 import { ArrowUp, Mic } from './icons';
 import { cap, qty, setLabel } from '@/lib/format';
+import SandboxMeal, { type MealSandboxData } from './SandboxMeal';
+import SandboxWorkout from './SandboxWorkout';
 
-type Props = { date: string; today: string };
+type Props = { date: string; today: string; unit: WUnit };
+type SandboxResult = MealSandboxData | { kind: 'workout'; plan: WorkoutPlan };
 
 type Recognition = {
   lang: string; continuous: boolean; interimResults: boolean;
@@ -15,22 +21,18 @@ type Recognition = {
 };
 type RecognitionCtor = new () => Recognition;
 
-const TEMPLATES = [
-  { label: 'Meal', text: 'breakfast: ' },
-  { label: 'Workout', text: 'Workout log\n' },
-  { label: 'Activity', text: 'played tennis for ' },
-];
-
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const total = (items: FoodItem[], k: 'protein_g' | 'calories') => items.reduce((a, i) => a + (i[k] || 0), 0);
 const shortDate = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
 
-export default function LogBox({ date, today }: Props) {
+export default function LogBox({ date, today, unit }: Props) {
   const router = useRouter();
+  const [mode, setMode] = useState<'log' | 'sandbox'>('log');
+  const [sandbox, setSandbox] = useState<SandboxResult | null>(null);
   const [text, setText] = useState('');
   const [sentText, setSentText] = useState('');
   const [drafts, setDrafts] = useState<Draft[] | null>(null);
-  const [busy, setBusy] = useState<'parse' | 'save' | null>(null);
+  const [busy, setBusy] = useState<'parse' | 'save' | 'sandbox' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [, start] = useTransition();
@@ -71,6 +73,50 @@ export default function LogBox({ date, today }: Props) {
     ta.style.height = 'auto';
     ta.style.height = `${Math.min(ta.scrollHeight, 320)}px`;
   }, [text]);
+
+  async function send() {
+    return mode === 'sandbox' ? plan() : parse();
+  }
+
+  /** Sandbox: nothing is saved. The text stays in the box so you can tweak and resend. */
+  async function plan() {
+    const msg = text.trim();
+    if (!msg || busy) return;
+    recRef.current?.stop();
+    setBusy('sandbox');
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch('/api/sandbox', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: msg, date }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'Something went wrong');
+      setSandbox(body);
+      setSentText(msg);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function logFromSandbox(d: MealDraft) {
+    setDrafts([d]);
+    setSentText(`(sandbox) ${sentText}`);
+    setSandbox(null);
+    setText('');
+    setMode('log');
+  }
+
+  function fillFromSandbox(t: string) {
+    setSandbox(null);
+    setMode('log');
+    setText(t);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }
 
   async function parse() {
     const msg = text.trim();
@@ -140,7 +186,7 @@ export default function LogBox({ date, today }: Props) {
             next.carbs_g = f.per100.carbs == null ? null : r1(f.per100.carbs * g);
             next.fat_g = f.per100.fat == null ? null : r1(f.per100.fat * g);
           }
-          if ('protein_g' in patch) next.source = 'manual';
+          if ('protein_g' in patch || 'calories' in patch) next.source = 'manual';
           return next;
         });
         return { ...d, items };
@@ -164,43 +210,52 @@ export default function LogBox({ date, today }: Props) {
 
   return (
     <>
-      <div className="logbox">
-        <label htmlFor="log" className="sr-only">Log a meal, workout, activity or habit</label>
+      <div className={`logbox ${mode === 'sandbox' ? 'sb' : ''}`}>
+        <label htmlFor="log" className="sr-only">{mode === 'sandbox' ? 'Plan a meal or workout' : 'Log a meal, workout, activity or habit'}</label>
         <textarea
           id="log"
           ref={taRef}
           value={text}
           rows={2}
-          placeholder={date === today ? 'What did you eat or do?' : `Log something for ${shortDate(date)}`}
+          placeholder={
+            mode === 'sandbox'
+              ? 'Try "salmon and rice", or "lower day, 45 min"'
+              : date === today ? 'What did you eat or do?' : `Log something for ${shortDate(date)}`
+          }
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              parse();
+              send();
             }
           }}
         />
         <div className="row">
-          <div className="chips">
-            {TEMPLATES.map((t) => (
-              <button key={t.label} type="button" className="chip" onClick={() => { setText(t.text); taRef.current?.focus(); }}>
-                {t.label}
-              </button>
-            ))}
+          <div className="seg" role="group" aria-label="Mode">
+            <button type="button" aria-pressed={mode === 'log'} onClick={() => setMode('log')}>Log</button>
+            <button type="button" aria-pressed={mode === 'sandbox'} onClick={() => setMode('sandbox')}>Sandbox</button>
           </div>
-          {speechCtor && (
-            <button type="button" className={`round round-soft ${listening ? 'listening' : ''}`} onClick={toggleMic} aria-label={listening ? 'Stop dictating' : 'Dictate'} aria-pressed={listening}>
-              <Mic />
+          <div style={{ display: 'flex', gap: 8 }}>
+            {speechCtor && (
+              <button type="button" className={`round round-soft ${listening ? 'listening' : ''}`} onClick={toggleMic} aria-label={listening ? 'Stop dictating' : 'Dictate'} aria-pressed={listening}>
+                <Mic />
+              </button>
+            )}
+            <button type="button" className="round round-dark" onClick={send} disabled={!text.trim() || !!busy} aria-label={mode === 'sandbox' ? 'Plan it' : 'Read my log'}
+              style={mode === 'sandbox' ? { background: 'var(--pink-ink)' } : undefined}>
+              <ArrowUp color="#fff" />
             </button>
-          )}
-          <button type="button" className="round round-dark" onClick={parse} disabled={!text.trim() || !!busy} aria-label="Read my log">
-            <ArrowUp color="#fff" />
-          </button>
+          </div>
         </div>
+        {mode === 'sandbox' && !busy && !error && <div className="sbnote">Sandbox: plan a meal to hit your protein, or ask for a workout. Nothing gets saved.</div>}
         {busy === 'parse' && <div className="small muted" role="status">Reading that and looking up the foods…</div>}
+        {busy === 'sandbox' && <div className="sbnote" role="status">Working it out…</div>}
         {error && <div className="error" role="alert">{error}</div>}
         {notice && <div className="small muted" role="status">{notice}</div>}
       </div>
+
+      {sandbox?.kind === 'meal' && <SandboxMeal key={sentText} data={sandbox} onLog={logFromSandbox} onClear={() => setSandbox(null)} />}
+      {sandbox?.kind === 'workout' && <SandboxWorkout plan={sandbox.plan} onFill={fillFromSandbox} onClear={() => setSandbox(null)} />}
 
       {drafts && (
         <section aria-label="Check before saving" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -215,9 +270,7 @@ export default function LogBox({ date, today }: Props) {
                     <option value="snack">Snack</option>
                   </select>
                 )}
-                {d.type === 'workout' && (
-                  <input aria-label="Workout name" placeholder="Workout" value={d.title ?? ''} onChange={(e) => update(i, { title: e.target.value || null } as Partial<Draft>)} style={{ flex: 1, minWidth: 0 }} />
-                )}
+                {d.type === 'workout' && <strong style={{ flex: 1 }}>Workout <span className="small muted" style={{ fontWeight: 500 }}>· {unit}</span></strong>}
                 {d.type === 'activity' && (
                   <input aria-label="Activity" value={d.name} onChange={(e) => update(i, { name: e.target.value } as Partial<Draft>)} style={{ flex: 1, minWidth: 0 }} />
                 )}
@@ -229,14 +282,14 @@ export default function LogBox({ date, today }: Props) {
               {d.type === 'meal' && (
                 <>
                   <div className="food-row small muted" style={{ borderTop: 0, paddingBottom: 0 }}>
-                    <span>Food</span><span style={{ textAlign: 'right' }}>grams</span><span style={{ textAlign: 'right' }}>protein</span><span />
+                    <span>Food</span><span style={{ textAlign: 'right' }}>grams</span><span style={{ textAlign: 'right' }}>prot</span><span style={{ textAlign: 'right' }}>kcal</span><span />
                   </div>
                   {d.items.map((f, fi) => (
                     <div className="food-row" key={fi}>
                       <div style={{ minWidth: 0 }}>
                         <div>
                           {f.name}
-                          <span className={`src src-${f.source}`}>{f.source === 'usda' ? 'USDA' : f.source === 'manual' ? 'edited' : 'estimate'}</span>
+                          <span className={`src src-${f.source}`}>{f.source === 'usda' ? 'USDA' : f.source === 'manual' ? 'edited' : 'est.'}</span>
                         </div>
                         <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {[f.quantity != null ? `${qty(f.quantity)} ${f.unit ?? ''}`.trim() : null, f.fdc_description].filter(Boolean).join(' · ')}
@@ -244,6 +297,7 @@ export default function LogBox({ date, today }: Props) {
                       </div>
                       <input type="number" inputMode="decimal" min={0} aria-label={`${f.name} grams`} value={f.grams ?? ''} onChange={(e) => updateFood(i, fi, { grams: num(e.target.value) })} />
                       <input type="number" inputMode="decimal" min={0} aria-label={`${f.name} protein grams`} value={f.protein_g} onChange={(e) => updateFood(i, fi, { protein_g: num(e.target.value) ?? 0 })} />
+                      <input type="number" inputMode="numeric" min={0} aria-label={`${f.name} calories`} value={f.calories} onChange={(e) => updateFood(i, fi, { calories: num(e.target.value) ?? 0 })} />
                       <button type="button" className="x" onClick={() => removeFood(i, fi)} aria-label={`Remove ${f.name}`}>×</button>
                     </div>
                   ))}
@@ -258,12 +312,15 @@ export default function LogBox({ date, today }: Props) {
                 d.exercises.map((ex, ei) => (
                   <div className="ex" key={ei} style={{ alignItems: 'center' }}>
                     <span>
-                      {ex.name}
-                      {ex.tags.includes('abs') && <span className="src src-usda" style={{ background: 'var(--abs-light)', color: 'var(--blue-ink)' }}>abs</span>}
-                      {ex.superset && <span className="small muted"> · superset {ex.superset}</span>}
+                      {ex.movement}
+                      <span className="src" style={ex.category === 'abs' ? { background: 'var(--abs-light)', color: 'var(--blue-ink)' } : ex.category === 'cardio' ? { background: 'var(--act)', color: 'var(--act-ink)' } : { background: 'var(--purple)', color: 'var(--purple-ink)' }}>
+                        {CATEGORY_LABEL[ex.category]}
+                      </span>
+                      {ex.name.toLowerCase() !== ex.movement.toLowerCase() && <div className="small muted">{ex.name}</div>}
+                      {ex.superset && <span className="small muted">superset {ex.superset}</span>}
                     </span>
                     <span className="sets" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {ex.sets.map((s) => setLabel(s)).join(' · ')}
+                      {ex.sets.map((s) => setLabel(s, unit, false)).join(' · ')}
                       <button type="button" className="x" onClick={() => removeExercise(i, ei)} aria-label={`Remove ${ex.name}`}>×</button>
                     </span>
                   </div>

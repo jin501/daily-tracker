@@ -2,16 +2,18 @@
 
 A personal tracker for protein, workouts and habits. You type (or say) what you ate or did, it parses it, you confirm, and it lands on a dashboard.
 
-- **Today**: protein vs your goal (110 counts, 130 is the goal), calories, streaks, meals with per-item protein, workouts and activities, abs sets this week, weekly workouts, habit checks. Use the arrows to view or edit past days.
-- **Trends**: week, month or year calendar colored by training (workout, abs only, both) or protein, plus weekly bars, ab stats and habit strips.
-- **Lifts**: per-exercise top-set history, PRs, estimated 1RM, volume.
-- **Settings**: goals and habits.
+- **Today**: gym sign in/out with a live timer, the day type (Upper, Lower, Full body) and activity pills up top, protein vs your goal (110 counts, 130 is the goal), calories vs your range, streaks, meals with protein and kcal per item, training cards, abs this week, weekly workouts and habits. Use the arrows to view or edit past days.
+- **Calories**: tap the calories tile for a per-meal and per-food breakdown, where each number came from, tap-to-fix, and Recheck.
+- **Sandbox**: flip the log box to Sandbox to plan a meal that hits your remaining protein (with − / + to fiddle), or get a workout suggestion from your own history. Nothing saves until you tap Log this.
+- **Trends**: week, month or year calendar colored by training (workout, abs only, both) or protein, plus weekly bars (workouts, gym hours, ab sets), ab stats and habit strips.
+- **Lifts**: grouped by core movement (Row, Lat Pulldown...) with a chart per variation (Cable Row, DB Row...), PRs, estimated 1RM, volume, lb/kg toggle, and an editor to fix groupings.
+- **Settings**: protein goal, calorie range, weekly goals, lb/kg, habits with emoji.
 
 ## How logging works
 
 1. You send a message like `breakfast 1/4 cup steel cut oats, 5 shrimp, 1 egg` or paste a whole workout log. Past dates work: `yesterday`, `saturday`, `9/18`.
-2. Claude (Haiku by default) turns it into structured items and estimates grams for each food.
-3. Each food is looked up in USDA FoodData Central and protein/calories are computed from grams. If USDA has no match, Claude's estimate is used and tagged `estimate`.
+2. Claude (Haiku by default) turns it into structured items: grams for each food plus a realistic calorie/protein estimate, and for exercises the variation, its core movement and category.
+3. Each food is searched in USDA FoodData Central. A USDA match is only used if its numbers for that amount land near the estimate (calories within 35%, protein within 40%); this stops things like "1 cup rice" matching raw rice. Mixed dishes (stews, jjigae, hotteok) and foods with no agreeing match use the estimate, tagged `est.`.
 4. You see a confirm card, fix anything, and save.
 
 Your original message is always stored in `entries.raw_text`, so history can be re-parsed later.
@@ -54,8 +56,10 @@ The backend is built so UI changes rarely need backend changes.
 - **New stat anywhere**: add an entry to the registry in `lib/metrics.ts`. It's then available to every screen and to `GET /api/metrics?ids=...&from=...&to=...&bucket=day|week|month`. Habits are automatic as `habit:<key>`.
 - **Rearrange Trends**: edit `config/trends.ts`. The `weekly-bars` widget works with any metric and goal.
 - **Goals**: Settings page, or the `goals` table. `success_min` is the "still counts" number.
-- **New habit**: Settings, or just say it in the log box ("took creatine").
-- **Exercise groups**: exercises carry `tags` (abs, back, legs, ...). "Ab sets" is just the `abs` tag, so leg days or push/pull are one registry entry away.
+- **Habits**: add, rename, change the emoji or remove them in Settings. The log box only checks off habits you track ("took vitamins", "walked"); it never creates new ones.
+- **Exercise groups**: each exercise (a variation) belongs to a core movement in `movements`, which has the category (upper, lower, abs, cardio, full_body). Cards, abs counts, day types and the coach all read the `exercise_info` view. Fix any grouping on Lifts.
+- **Workout suggestions**: `lib/coach.ts`. Plain rules over your last 12 weeks, no AI guessing: most overdue day type, your usual exercises for it, double progression for weights and reps. It says it's still learning until about 3 weeks and 6 gym days are logged.
+- **Database changes**: `db/schema.sql` and `db/seed.sql` run on every build and are safe to re-run. One-time data changes go in `db/migrations/NNN_name.sql`; each runs once and is recorded in `schema_migrations`.
 - **Parser**: prompt and tool schema live in `lib/parse.ts`. Whatever it returns is validated against `lib/draft.ts` before saving, so prompt or model changes can't corrupt data. Set `ANTHROPIC_MODEL` to try a different model.
 
 ## Project map
@@ -65,17 +69,25 @@ app/                 pages (Today, Trends, Lifts, Settings, Login) and API route
 components/          LogBox (input + confirm cards), habit toggles, nav
 config/trends.ts     Trends layout
 lib/metrics.ts       metrics registry, goals, streaks
-lib/queries.ts       day, lifts and exercise queries
+lib/queries.ts       day view (training cards), lifts queries
 lib/parse.ts         Claude parsing + normalization
-lib/usda.ts          USDA lookup with Postgres cache
+lib/usda.ts          USDA candidates, cached, cross-checked against the estimate
+lib/movements.ts     core movements, name rules for older exercises
+lib/coach.ts         workout suggestions from your history
+lib/sandbox.ts       meal sandbox math (runs in the browser)
+lib/gym.ts           gym sessions, auto-end after 3 hours
+lib/daytype.ts       upper / lower / full body from the day's sets
 lib/save.ts          writes drafts in one transaction
 lib/draft.ts         the data contract (zod)
 db/schema.sql        tables (safe to re-run)
 db/seed.sql          default goals and habits
+db/migrations/       one-time data changes
 ```
 
 ## Notes
 
-- Weights are stored in kg; lb in your message is converted.
-- A "workout day" for the weekly goal is any day with a logged workout or activity (tennis counts). Change `training_days` in `lib/metrics.ts` if you want lifting only.
-- Deleting: the × next to a meal, workout or activity. To fix a saved meal, delete it and log it again.
+- Weights show in lb by default (Settings or Lifts to switch). They're stored in kg plus exactly what you typed, so 25 lb always shows as 25 lb.
+- Set a real `USDA_API_KEY` (free at fdc.nal.usda.gov). `DEMO_KEY` gets rate limited quickly, which means more foods fall back to estimates.
+- A "workout day" for the weekly goal is any day with a logged workout, activity or gym check-in. Change `training_days` in `lib/metrics.ts` if you want lifting only.
+- Gym sessions you forget to end close themselves at 3 hours; tap the gym time pill to fix the times.
+- Deleting: the × on a meal, a training card (removes that exercise's sets for the day) or an activity. Tap any food's kcal on the Calories page to fix it.

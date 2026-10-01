@@ -5,6 +5,7 @@ import { trendsLayout, type Tone, type Widget } from '@/config/trends';
 import { bestRun, daily, dailyStreak, getGoals, series, status, weeklyStreak, type Daily, type Goal } from '@/lib/metrics';
 import { lastDateOf } from '@/lib/queries';
 import { db } from '@/lib/db';
+import { num } from '@/lib/format';
 import {
   addDays, addMonths, dayNum, eachDay, fmt, isDate, minDate, monthEnd, monthStart,
   todayLocal, weekStart, weekday, yearEnd, yearStart,
@@ -19,8 +20,9 @@ const TONES: Record<Tone, { cls: string; ink: string; mid: string }> = {
   purple: { cls: 't-purple', ink: 'var(--purple-ink)', mid: 'var(--purple-mid)' },
   blue: { cls: 't-blue', ink: 'var(--blue-ink)', mid: 'var(--abs-light)' },
   green: { cls: 't-green', ink: 'var(--green-ink)', mid: 'var(--green-light)' },
-  yellow: { cls: 't-yellow', ink: 'var(--yellow-ink)', mid: '#E8D27A' },
-  peach: { cls: 't-peach', ink: 'var(--peach-ink)', mid: '#F2B79C' },
+  yellow: { cls: 't-yellow', ink: 'var(--yellow-ink)', mid: 'var(--yellow-mid)' },
+  peach: { cls: 't-peach', ink: 'var(--peach-ink)', mid: '#F5A887' },
+  mint: { cls: 't-act', ink: 'var(--act-ink)', mid: 'var(--act-mid)' },
 };
 
 export default async function Trends({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -219,7 +221,7 @@ function ProteinStreak({ c }: { c: Ctx }) {
   return (
     <section className="card t-peach row">
       <div>
-        <h2 className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Flame color="#8A2F0E" /> Protein streak</h2>
+        <h2 className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Flame color="#7B3014" /> Protein streak</h2>
         <div className="small ink2" style={{ marginTop: 6 }}>Best this {c.period}: {best} day{best === 1 ? '' : 's'}</div>
       </div>
       <div className="big">{current}</div>
@@ -232,10 +234,10 @@ function ProteinStreak({ c }: { c: Ctx }) {
 async function WeeklyBars({ c, w }: { c: Ctx; w: Extract<Widget, { type: 'weekly-bars' }> }) {
   const end = weekStart(c.until < c.from ? c.today : c.until);
   const start = addDays(end, -7 * (w.weeks - 1));
-  const target = c.goals[w.goal]?.target ?? 0;
+  const target = w.goal ? c.goals[w.goal]?.target ?? 0 : 0;
   const [weeks, streak] = await Promise.all([
     series(w.metric, start, addDays(end, 6), 'week'),
-    weeklyStreak(w.metric, target, c.today),
+    target ? weeklyStreak(w.metric, target, c.today) : Promise.resolve(0),
   ]);
   const max = Math.max(target, ...weeks.map((x) => x.value), 1);
   const tone = TONES[w.tone];
@@ -244,7 +246,7 @@ async function WeeklyBars({ c, w }: { c: Ctx; w: Extract<Widget, { type: 'weekly
     <section className={`card ${tone.cls}`} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div className="row-base">
         <h2 className="label">{w.title}</h2>
-        <span className="small ink2">goal {target}{w.unit}</span>
+        <span className="small ink2">{target ? `goal ${target}${w.unit}` : `${num(weeks.reduce((a, x) => a + x.value, 0) / Math.max(1, weeks.filter((x) => x.value > 0).length), 1)}${w.unit} avg`}</span>
       </div>
       <div className="bars" style={{ height: 150 }}>
         {weeks.map((x) => {
@@ -253,17 +255,17 @@ async function WeeklyBars({ c, w }: { c: Ctx; w: Extract<Widget, { type: 'weekly
             <div className="col" key={x.start}>
               <div style={{
                 height: `${Math.max(4, (x.value / max) * 100)}px`,
-                background: inProgress ? '#fff' : x.value >= target ? tone.ink : tone.mid,
+                background: inProgress ? '#fff' : target && x.value >= target ? tone.ink : target ? tone.mid : tone.ink,
                 border: inProgress ? `2px dashed ${tone.ink}` : undefined,
               }} />
-              <span className="v" style={{ color: tone.ink }}>{x.value}</span>
+              <span className="v" style={{ color: tone.ink }}>{num(x.value, w.decimals ?? 0)}</span>
               <span className="k" style={{ color: tone.ink }}>{fmt(x.start, { month: 'numeric', day: 'numeric' })}</span>
             </div>
           );
         })}
       </div>
       <div className="small ink2">
-        {streak > 0 ? `Weekly goal hit ${streak} week${streak === 1 ? '' : 's'} in a row` : 'Hit the goal this week to start a streak'}. Dashed bar is this week so far.
+        {!target ? 'Dashed bar is this week so far.' : `${streak > 0 ? `Weekly goal hit ${streak} week${streak === 1 ? '' : 's'} in a row` : 'Hit the goal this week to start a streak'}. Dashed bar is this week so far.`}
       </div>
     </section>
   );
@@ -295,15 +297,15 @@ async function HabitStrips({ c, days }: { c: Ctx; days: number }) {
   const end = c.until < c.from ? c.today : c.until;
   const start = addDays(end, -(days - 1));
   const range = eachDay(start, end);
-  const habits = await db()<{ key: string; name: string; color: string }[]>`
-    select key, name, color from habits where active order by sort, id`;
+  const habits = await db()<{ key: string; name: string; emoji: string | null; color: string }[]>`
+    select key, name, emoji, color from habits where active order by sort, id`;
   const pg = c.goals.protein_daily;
   const pMin = pg.success_min ?? pg.target;
 
   const rows = await Promise.all(
     habits.map(async (h) => {
       const vals = await daily(`habit:${h.key}`, addDays(end, -400), end);
-      return { name: h.name, color: h.color, vals, ok: (v: number) => v > 0 };
+      return { name: h.emoji ? `${h.emoji} ${h.name}` : h.name, color: h.color, vals, ok: (v: number) => v > 0 };
     }),
   );
   rows.push({ name: `Hit ${pMin}g+`, color: 'var(--green)', vals: c.proteinAll, ok: (v: number) => v >= pMin });
